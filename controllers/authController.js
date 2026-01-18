@@ -17,10 +17,13 @@ const redirectURL = `${process.env.BASE_URL}/auth/oauth/callback`;
 /*                               EMAIL HELPERS                                */
 /* -------------------------------------------------------------------------- */
 
-const sendEmailAsync = (options) => {
-  transporter.sendMail(options).catch((err) => {
-    console.error('Email send failed:', err.message);
-  });
+const sendEmailAsync = async (options) => {
+  try {
+    const info = await transporter.sendMail(options);
+    console.log("📧 Email sent successfully:", info.messageId);
+  } catch (err) {
+    console.error("❌ Email send failed:", err); // Logs full error object
+  }
 };
 
 const welcomeEmail = ({ name }) => ({
@@ -67,6 +70,7 @@ const otpEmail = ({ otp, purpose }) => ({
   </div>
   `,
 });
+
 
 /* -------------------------------------------------------------------------- */
 /*                                   REGISTER                                  */
