@@ -1,7 +1,7 @@
 import Profile from "../models/profileModel.js";
 import { ApiFeatures } from "../utils/apiFeatures.js";
 
-/* ---------------- CREATE PROFILE ---------------- */
+/* --------------- CREATE PROFILE --------------- */
 const createProfile = async (req, res, next) => {
   try {
     const existingProfile = await Profile.findOne({ user: req.userId });
