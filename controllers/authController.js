@@ -18,10 +18,22 @@ const redirectURL = `${process.env.BASE_URL}/auth/oauth/callback`;
 /*                               EMAIL HELPERS                                */
 /* -------------------------------------------------------------------------- */
 
-const sendEmailAsync = (options) => {
+/*const sendEmailAsync = (options) => {
   transporter.sendMail(options).catch((err) => {
     console.error('Email send failed:', err.message);
   });
+};   */
+
+const sendEmailAsync = async ({ to, subject, text, html }) => {
+  try {
+    await fetch(`${process.env.NETLIFY_FUNCTIONS_URL}/sendEmail`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, subject, text, html }),
+    });
+  } catch (err) {
+    console.error('Email send failed:', err.message);
+  }
 };
 
 const welcomeEmail = ({ name }) => ({
