@@ -1,7 +1,8 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import userModel from '../models/userModel.js';
-import getTransporter from '../config/nodemailer.js';
+import Profile from "../models/profileModel.js";
+import transporter from '../config/nodemailer.js';
 import { OAuth2Client } from 'google-auth-library';
 import { setAuthCookies } from '../utils/setAuthCookies.js';
 import { clearAuthCookies } from '../utils/clearAuthCookies.js';
@@ -14,16 +15,13 @@ const client = new OAuth2Client(
 const redirectURL = `${process.env.BASE_URL}/auth/oauth/callback`;
 
 /* -------------------------------------------------------------------------- */
-/*                               EMAIL HELPERS                                 */
+/*                               EMAIL HELPERS                                */
 /* -------------------------------------------------------------------------- */
 
-const sendEmailAsync = async (options) => {
-  try {
-    const transporter = await getTransporter();
-    await transporter.sendMail(options);
-  } catch (err) {
+const sendEmailAsync = (options) => {
+  transporter.sendMail(options).catch((err) => {
     console.error('Email send failed:', err.message);
-  }
+  });
 };
 
 const welcomeEmail = ({ name }) => ({
@@ -71,26 +69,124 @@ const otpEmail = ({ otp, purpose }) => ({
   `,
 });
 
+/* ---------------- LANDING SIGNUP CONTROLLER ---------------- */
+
+export const landingSignup = async (req, res) => {
+  const {
+    name,
+    email,
+    password,
+    gender,
+    lookingFor,
+    age,
+    relationshipGoal,
+  } = req.body;
+
+  // Validate required fields
+  if (!name || !email || !password || !gender || !lookingFor || !age || !relationshipGoal) {
+    return res.status(400).json({
+      success: false,
+      message: "All fields are required",
+    });
+  }
+
+  try {
+    // Check if user already exists
+    const existingUser = await userModel.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "Email already exists. Please login.",
+      });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const user = await userModel.create({
+      name,
+      email,
+      password: hashedPassword,
+      role: "user",
+    });
+
+    // Create default profile and set name
+    const profile = await Profile.create({
+      user: user._id,
+      name, // updated name in profile
+      gender,
+      age,
+      relationshipGoal,
+      lookingForGender: lookingFor,
+      bio: "",
+      photos: [],
+    });
+
+    // Generate JWT
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // Set auth cookies
+    setAuthCookies(res, token);
+
+    // Send welcome email asynchronously
+    sendEmailAsync({
+      from: process.env.SENDER_EMAIL,
+      to: email,
+      ...welcomeEmail({ name }),
+    });
+
+    // Response
+    return res.status(201).json({
+      success: true,
+      message: "Account created successfully",
+    });
+  } catch (error) {
+    console.error("Landing Signup error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong during signup",
+      error: error.message,
+    });
+  }
+};
+
+
 /* -------------------------------------------------------------------------- */
 /*                                   REGISTER                                  */
 /* -------------------------------------------------------------------------- */
 
 export const register = async (req, res) => {
-  if (!req.body) return res.json({ message: 'Request body is missing' });
+  if (!req.body) {
+    return res.json({ message: 'Request body is missing' });
+  }
 
   const { name, email, password } = req.body;
-  if (!name || !email || !password)
+
+  if (!name || !email || !password) {
     return res.json({ success: false, message: 'Missing Details' });
+  }
 
   try {
     const existingUser = await userModel.findOne({ email });
-    if (existingUser) return res.json({ success: false, message: 'User already exists' });
+    if (existingUser) {
+      return res.json({ success: false, message: 'User already exists' });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new userModel({ name, email, password: hashedPassword });
     await user.save();
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
     setAuthCookies(res, token);
 
     sendEmailAsync({
@@ -110,22 +206,34 @@ export const register = async (req, res) => {
 /* -------------------------------------------------------------------------- */
 
 export const login = async (req, res) => {
-  if (!req.body) return res.json({ message: 'Request body is missing' });
+  if (!req.body) {
+    return res.json({ message: 'Request body is missing' });
+  }
 
   const { email, password } = req.body;
-  if (!email || !password)
+
+  if (!email || !password) {
     return res.json({ success: false, message: 'Email and password are required' });
+  }
 
   try {
     const user = await userModel.findOne({ email });
-    if (!user) return res.json({ success: false, message: 'Invalid email' });
+    if (!user) {
+      return res.json({ success: false, message: 'Invalid email' });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.json({ success: false, message: 'Invalid password' });
+    if (!isMatch) {
+      return res.json({ success: false, message: 'Invalid password' });
+    }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
     setAuthCookies(res, token);
-
     return res.json({ success: true, message: 'Login successful' });
   } catch (error) {
     return res.json({ success: false, message: error.message });
@@ -147,21 +255,28 @@ export const googleOAuthRedirect = (req, res) => {
     ],
     redirect_uri: redirectURL,
   });
+
   res.redirect(authorizeUrl);
 };
 
 export const googleOAuthCallback = async (req, res) => {
   const { code } = req.query;
-  if (!code) return res.redirect(`${process.env.VITE_CLIENT_URL}`);
+
+  if (!code) {
+    return res.redirect(`${process.env.VITE_CLIENT_URL}`);
+  }
 
   try {
     const { tokens } = await client.getToken({ code, redirect_uri: redirectURL });
     client.setCredentials(tokens);
 
-    const response = await client.request({ url: 'https://www.googleapis.com/oauth2/v3/userinfo' });
-    const { email, name, picture, sub: googleId } = response.data;
+    const response = await client.request({
+      url: 'https://www.googleapis.com/oauth2/v3/userinfo',
+    });
 
+    const { email, name, picture, sub: googleId } = response.data;
     let user = await userModel.findOne({ email });
+
     if (!user) {
       user = new userModel({
         name,
@@ -171,6 +286,7 @@ export const googleOAuthCallback = async (req, res) => {
         isAccountVerified: true,
         role: 'user',
       });
+
       await user.save();
 
       sendEmailAsync({
@@ -180,12 +296,28 @@ export const googleOAuthCallback = async (req, res) => {
       });
     } else {
       let shouldSave = false;
-      if (!user.avatar && picture) { user.avatar = picture; shouldSave = true; }
-      if (!user.isAccountVerified) { user.isAccountVerified = true; shouldSave = true; }
-      if (shouldSave) await user.save();
+
+      if (!user.avatar && picture) {
+        user.avatar = picture;
+        shouldSave = true;
+      }
+
+      if (!user.isAccountVerified) {
+        user.isAccountVerified = true;
+        shouldSave = true;
+      }
+
+      if (shouldSave) {
+        await user.save();
+      }
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
     setAuthCookies(res, token);
     return res.redirect(`${process.env.VITE_CLIENT_URL}/dashboard`);
   } catch (error) {
@@ -213,7 +345,10 @@ export const logout = async (req, res) => {
 export const sendVerifyOtp = async (req, res) => {
   try {
     const user = await userModel.findById(req.userId);
-    if (user.isAccountVerified) return res.json({ success: false, message: 'Account already verified' });
+
+    if (user.isAccountVerified) {
+      return res.json({ success: false, message: 'Account already verified' });
+    }
 
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     user.verifyOtp = otp;
@@ -233,12 +368,15 @@ export const sendVerifyOtp = async (req, res) => {
 };
 
 export const verifyEmail = async (req, res) => {
-  if (!req.body) return res.json({ message: 'Request body is missing' });
+  if (!req.body) {
+    return res.json({ message: 'Request body is missing' });
+  }
 
   const { otp } = req.body;
 
   try {
     const user = await userModel.findById(req.userId);
+
     if (!user || user.verifyOtp !== otp || user.verifyOtpExpireAt < Date.now()) {
       return res.json({ success: false, message: 'Invalid or expired OTP' });
     }
@@ -267,12 +405,17 @@ export const isAuthenticated = async (req, res) => {
 /* -------------------------------------------------------------------------- */
 
 export const sendResetOtp = async (req, res) => {
-  if (!req.body) return res.json({ message: 'Request body is missing' });
+  if (!req.body) {
+    return res.json({ message: 'Request body is missing' });
+  }
 
   const { email } = req.body;
+
   try {
     const user = await userModel.findOne({ email });
-    if (!user) return res.json({ success: false, message: 'User not found' });
+    if (!user) {
+      return res.json({ success: false, message: 'User not found' });
+    }
 
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     user.resetOtp = otp;
@@ -292,11 +435,15 @@ export const sendResetOtp = async (req, res) => {
 };
 
 export const resetPassword = async (req, res) => {
-  if (!req.body) return res.json({ message: 'Request body is missing' });
+  if (!req.body) {
+    return res.json({ message: 'Request body is missing' });
+  }
 
   const { email, otp, newPassword } = req.body;
+
   try {
     const user = await userModel.findOne({ email });
+
     if (!user || user.resetOtp !== otp || user.resetOtpExpireAt < Date.now()) {
       return res.json({ success: false, message: 'Invalid or expired OTP' });
     }

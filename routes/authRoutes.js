@@ -1,9 +1,10 @@
 import express from "express";
-import { googleOAuthCallback, googleOAuthRedirect, isAuthenticated, login, logout, register, resetPassword, sendResetOtp, sendVerifyOtp, verifyEmail } from "../controllers/authController.js";
+import { googleOAuthCallback, googleOAuthRedirect, landingSignup, isAuthenticated, login, logout, register, resetPassword, sendResetOtp, sendVerifyOtp, verifyEmail } from "../controllers/authController.js";
 import userAuth from "../middleware/userAuth.js";
 
 const authRouter = express.Router();
 
+authRouter.post('/landing-signup',landingSignup);
 authRouter.post('/register',register);
 authRouter.post('/login',login);
 authRouter.post('/logout',logout);
