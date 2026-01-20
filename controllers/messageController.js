@@ -1,5 +1,6 @@
 import Message from "../models/messageModel.js";
 import Conversation from "../models/conversationModel.js";
+import { io } from "../server.js"; // <-- import your Socket.IO server instance
 
 /**
  * Create a new message
@@ -37,6 +38,14 @@ const createMessage = async (req, res, next) => {
       { path: "sender", select: "name avatar" },
       { path: "replyTo", populate: { path: "sender", select: "name avatar" }, select: "content attachments sender" },
     ]);
+
+    // ---------- SOCKET.IO EMIT ----------
+    // Emit to all participants in the conversation
+    conversation.participants.forEach((participantId) => {
+      if (io.sockets.adapter.rooms.has(participantId.toString())) {
+        io.to(participantId.toString()).emit("receive-message", message);
+      }
+    });
 
     res.status(201).json({ success: true, data: message });
   } catch (error) {
