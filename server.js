@@ -14,6 +14,7 @@ import fileRouter from "./routes/fileRoutes.js";
 import profileRouter from "./routes/profileRoutes.js";
 import messageRouter from "./routes/messageRoutes.js";
 import callRouter from "./routes/callRoutes.js";
+import conversationRouter from "./routes/conversationRoutes.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -41,6 +42,7 @@ app.use("/api/exchange", exchangeRouter);
 app.use("/api/file", fileRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/message", messageRouter);
+app.use("/api/conversation", conversationRouter);
 app.use("/api/call", callRouter);
 
 app.listen(port, () => console.log(`Server running on port:${port}`));

@@ -12,11 +12,11 @@ export const getUserData = async (req, res)=>{
         }
 
         return res.json({success:true, userData: {
+            _id:user._id,
             name: user.name,  
             email: user.email,
             role:req.userRole,
             avatar:user.avatar, 
-            publicId:user.publicId,
             phone:user.phone,
             isAccountVerified: user.isAccountVerified
         }});
