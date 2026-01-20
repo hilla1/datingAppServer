@@ -63,12 +63,24 @@ const onlineUsers = new Map();
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
-  // Add user to online map
-  socket.on("user-online", (userId) => {
-    onlineUsers.set(userId, socket.id);
+  // User joins personal room
+  socket.on("join-room", (userId) => {
+    if (userId) {
+      socket.join(userId);
+      onlineUsers.set(userId, socket.id);
+      console.log(`User ${userId} joined their room`);
+    }
   });
 
-  // Handle sending messages
+  // User joins a conversation room
+  socket.on("join-conversation", (conversationId) => {
+    if (conversationId) {
+      socket.join(conversationId);
+      console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
+    }
+  });
+
+  // Handle sending a message
   socket.on("send-message", ({ conversationId, senderId, content, replyTo }) => {
     const message = {
       _id: Date.now().toString(), // temporary ID, real ID comes from DB
@@ -79,13 +91,11 @@ io.on("connection", (socket) => {
       createdAt: new Date(),
     };
 
-    // Emit to all participants
+    // Emit to all participants in the conversation room
     socket.to(conversationId).emit("receive-message", message);
-  });
 
-  // Join rooms for conversation
-  socket.on("join-conversation", (conversationId) => {
-    socket.join(conversationId);
+    // Optionally emit to sender's own room to update UI immediately
+    socket.emit("receive-message", message);
   });
 
   socket.on("disconnect", () => {
@@ -96,5 +106,6 @@ io.on("connection", (socket) => {
   });
 });
 
-app.listen(port, () => console.log(`Server running on port:${port}`));
+server.listen(port, () => console.log(`Server running on port:${port}`));
+
 export { io };
