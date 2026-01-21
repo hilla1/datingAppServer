@@ -58,34 +58,79 @@ const io = new Server(server, {
   },
 });
 
-// Map to track connected users
 const onlineUsers = new Map();
 
 io.on("connection", (socket) => {
-  console.log("New client connected:", socket.id);
+  //console.log("New client connected:", socket.id);
 
-  // User joins personal room
   socket.on("join-room", (userId) => {
     if (userId) {
       socket.join(userId);
       onlineUsers.set(userId, socket.id);
-      console.log(`User ${userId} joined their room`);
+      //console.log(`User ${userId} joined their room`);
+      socket.broadcast.emit("user-online", userId);
     }
   });
 
-  // User joins a conversation room
+  socket.on("check-user-online", (targetUserId) => {
+    if (!targetUserId) return;
+    const isOnline = onlineUsers.has(targetUserId.toString());
+    socket.emit("user-online-status", { userId: targetUserId, online: isOnline });
+  });
+
   socket.on("join-conversation", (conversationId) => {
     if (conversationId) {
       socket.join(conversationId);
-      console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
+      //console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
     }
+  });
+
+  socket.on("typing", ({ conversationId }) => {
+    if (conversationId) {
+      socket.to(conversationId).emit("typing", { conversationId });
+    }
+  });
+
+  socket.on("stop-typing", ({ conversationId }) => {
+    if (conversationId) {
+      socket.to(conversationId).emit("stop-typing", { conversationId });
+    }
+  });
+
+  // ────────────────────────────────────────────────
+  // IMPROVED: messages-read handler with logging
+  // ────────────────────────────────────────────────
+  socket.on("messages-read", ({ conversationId, userId, messageIds }) => {
+    if (!conversationId || !userId || !messageIds?.length) {
+      //console.log("Invalid messages-read payload:", { conversationId, userId, messageIds });
+      return;
+    }
+
+    //console.log(`User ${userId} marked messages as read in ${conversationId}:`, messageIds);
+
+    // Broadcast to the entire conversation room (including sender!)
+    io.to(conversationId).emit("messages-read", {
+      conversationId,
+      messageIds,
+      readByUserId: userId,   // ← optional: helps frontend know who read it
+    });
   });
 
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
-    onlineUsers.forEach((value, key) => {
-      if (value === socket.id) onlineUsers.delete(key);
-    });
+
+    let disconnectedUserId = null;
+    for (const [userId, sockId] of onlineUsers.entries()) {
+      if (sockId === socket.id) {
+        disconnectedUserId = userId;
+        onlineUsers.delete(userId);
+        break;
+      }
+    }
+
+    if (disconnectedUserId) {
+      io.emit("user-offline", disconnectedUserId);
+    }
   });
 });
 

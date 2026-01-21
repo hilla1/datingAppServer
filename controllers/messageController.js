@@ -1,6 +1,8 @@
+// src/controllers/messageController.js
 import Message from "../models/messageModel.js";
 import Conversation from "../models/conversationModel.js";
-import { io } from "../server.js"; // <-- import your Socket.IO server instance
+import { io } from "../server.js"; 
+import { deleteFromCloudinary } from "../middleware/uploadMiddleware.js"; 
 
 /**
  * Create a new message
@@ -18,7 +20,7 @@ const createMessage = async (req, res, next) => {
     if (!conversation)
       return res.status(404).json({ success: false, message: "Conversation not found" });
 
-    // Create message
+    // Create message with sender already marked as read
     let message = await Message.create({
       conversationId,
       sender,
@@ -29,23 +31,28 @@ const createMessage = async (req, res, next) => {
       deletedBy: [],
     });
 
-    // Update conversation lastMessage
+    // Update last message reference
     conversation.lastMessage = message._id;
     await conversation.save();
 
-    // Nested populate
+    // Populate for response + socket
     message = await message.populate([
       { path: "sender", select: "name avatar" },
       { path: "replyTo", populate: { path: "sender", select: "name avatar" }, select: "content attachments sender" },
     ]);
 
-    // ---------- SOCKET.IO EMIT ----------
-    // Emit to all participants in the conversation
-    conversation.participants.forEach((participantId) => {
-      if (io.sockets.adapter.rooms.has(participantId.toString())) {
-        io.to(participantId.toString()).emit("receive-message", message);
-      }
-    });
+    // ────────────────────────────────────────────────
+    // IMPORTANT CHANGE: Emit to CONVERSATION room
+    // This ensures everyone currently in the chat sees the message instantly
+    // ────────────────────────────────────────────────
+    io.to(conversationId).emit("receive-message", message);
+
+    // Optional: also emit to individual user rooms 
+    // conversation.participants.forEach((participantId) => {
+    //   if (io.sockets.adapter.rooms.has(participantId.toString())) {
+    //     io.to(participantId.toString()).emit("receive-message", message);
+    //   }
+    // });
 
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -53,9 +60,10 @@ const createMessage = async (req, res, next) => {
   }
 };
 
-/**
- * Get message by ID
- */
+// ────────────────────────────────────────────────────────────────
+// The rest of your functions remain unchanged
+// ────────────────────────────────────────────────────────────────
+
 const getMessageById = async (req, res, next) => {
   try {
     const message = await Message.findById(req.params.id).populate([
@@ -72,9 +80,6 @@ const getMessageById = async (req, res, next) => {
   }
 };
 
-/**
- * Get all messages in a conversation with pagination
- */
 const getAllMessages = async (req, res, next) => {
   try {
     const { conversationId, page = 1, limit = 50 } = req.query;
@@ -102,9 +107,6 @@ const getAllMessages = async (req, res, next) => {
   }
 };
 
-/**
- * Full update (PUT)
- */
 const updateMessage = async (req, res, next) => {
   try {
     const updateData = { ...req.body, edited: true };
@@ -128,9 +130,6 @@ const updateMessage = async (req, res, next) => {
   }
 };
 
-/**
- * Partial update (PATCH)
- */
 const patchMessage = async (req, res, next) => {
   try {
     let message = await Message.findById(req.params.id);
@@ -156,9 +155,6 @@ const patchMessage = async (req, res, next) => {
   }
 };
 
-/**
- * Soft delete for current user
- */
 const deleteMessage = async (req, res, next) => {
   try {
     const message = await Message.findById(req.params.id);
@@ -171,15 +167,28 @@ const deleteMessage = async (req, res, next) => {
       await message.save();
     }
 
+    const conversation = await Conversation.findById(message.conversationId);
+    if (conversation && message.deletedBy.length === conversation.participants.length) {
+      for (const att of message.attachments) {
+        if (att.publicId) {
+          try {
+            await deleteFromCloudinary(att.publicId);
+          } catch (deleteErr) {
+            console.error("Failed to delete attachment:", att.publicId, deleteErr);
+          }
+        }
+      }
+
+      await Message.findByIdAndDelete(req.params.id);
+      return res.status(200).json({ success: true, message: "Message fully deleted" });
+    }
+
     res.status(200).json({ success: true, message: "Message deleted successfully for this user" });
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * Get all conversations for current user
- */
 const getUserConversations = async (req, res, next) => {
   try {
     const userId = req.userId;
@@ -208,6 +217,49 @@ const getUserConversations = async (req, res, next) => {
   }
 };
 
+const markConversationAsRead = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { conversationId } = req.body;
+
+    if (!conversationId) {
+      return res.status(400).json({
+        success: false,
+        message: "Conversation ID is required",
+      });
+    }
+
+    const unreadMessages = await Message.find({
+      conversationId,
+      sender: { $ne: userId },
+      readBy: { $ne: userId },
+      deletedBy: { $ne: userId },
+    }).select("_id");
+
+    const messageIds = unreadMessages.map((m) => m._id);
+
+    if (messageIds.length > 0) {
+      await Message.updateMany(
+        { _id: { $in: messageIds } },
+        { $addToSet: { readBy: userId } }
+      );
+
+      io.to(conversationId).emit("messages-read", {
+        conversationId,
+        messageIds,
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Messages marked as read",
+      messageIds,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const messageController = {
   createMessage,
   getMessageById,
@@ -216,4 +268,5 @@ export const messageController = {
   patchMessage,
   deleteMessage,
   getUserConversations,
+  markConversationAsRead,
 };

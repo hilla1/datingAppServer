@@ -27,4 +27,11 @@ messageRouter.delete("/:id", userAuth, messageController.deleteMessage);
 // Get all conversations for the current user with last message & unread counts
 messageRouter.get("/conversations/list", userAuth, messageController.getUserConversations);
 
+messageRouter.patch(
+  "/read",
+  userAuth,
+  messageController.markConversationAsRead
+);
+
+
 export default messageRouter;
