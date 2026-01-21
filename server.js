@@ -1,3 +1,4 @@
+// src/server.js
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
@@ -78,24 +79,6 @@ io.on("connection", (socket) => {
       socket.join(conversationId);
       console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
     }
-  });
-
-  // Handle sending a message
-  socket.on("send-message", ({ conversationId, senderId, content, replyTo }) => {
-    const message = {
-      _id: Date.now().toString(), // temporary ID, real ID comes from DB
-      conversationId,
-      sender: { _id: senderId },
-      content,
-      replyTo,
-      createdAt: new Date(),
-    };
-
-    // Emit to all participants in the conversation room
-    socket.to(conversationId).emit("receive-message", message);
-
-    // Optionally emit to sender's own room to update UI immediately
-    socket.emit("receive-message", message);
   });
 
   socket.on("disconnect", () => {
