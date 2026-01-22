@@ -48,12 +48,14 @@ const createMessage = async (req, res, next) => {
     // ────────────────────────────────────────────────
     io.to(conversationId).emit("receive-message", message);
 
-    // Optional: also emit to individual user rooms 
-    // conversation.participants.forEach((participantId) => {
-    //   if (io.sockets.adapter.rooms.has(participantId.toString())) {
-    //     io.to(participantId.toString()).emit("receive-message", message);
-    //   }
-    // });
+    // Emit to individual user rooms (for notifications, unread count, presence)
+    conversation.participants.forEach((participantId) => {
+      const uid = participantId.toString();
+      if (io.sockets.adapter.rooms.has(uid)) {
+        io.to(uid).emit("receive-message", message);
+      }
+    });
+
 
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -61,9 +63,6 @@ const createMessage = async (req, res, next) => {
   }
 };
 
-// ────────────────────────────────────────────────────────────────
-// The rest of your functions remain unchanged
-// ────────────────────────────────────────────────────────────────
 
 const getMessageById = async (req, res, next) => {
   try {

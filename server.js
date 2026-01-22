@@ -27,13 +27,11 @@ connectDB();
 
 const allowedOrigins = [process.env.VITE_CLIENT_URL];
 
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(cors({ origin: allowedOrigins, credentials: true }));
-
 
 const io = new Server(server, {
   cors: {
@@ -67,29 +65,51 @@ app.use("/api/conversation", conversationRouter);
 app.use("/api/call", callRouter);
 
 // Socket.IO connection logic
-const onlineUsers = new Map();
+const onlineUsers = new Map(); // userId (as string) → socket.id
 
 io.on("connection", (socket) => {
   // console.log("New client connected:", socket.id);
 
   socket.on("join-room", (userId) => {
-    if (userId) {
-      socket.join(userId);
-      onlineUsers.set(userId, socket.id);
-      // console.log(`User ${userId} joined their room`);
-      socket.broadcast.emit("user-online", userId);
+    if (!userId) return;
+
+    // Force string conversion – critical to avoid ObjectId vs string mismatch
+    const uid = String(userId);
+
+    // Clean up any previous entries for this user (handles multi-tab / reconnect)
+    for (const [existingUid, existingSockId] of onlineUsers.entries()) {
+      if (existingUid === uid) {
+        onlineUsers.delete(existingUid);
+        // Optional: you could notify old socket, but not necessary
+      }
     }
+
+    socket.join(uid);
+    onlineUsers.set(uid, socket.id);
+    // console.log(`User ${uid} joined their room (socket ${socket.id})`);
+
+    // Broadcast to others (not to self)
+    socket.broadcast.emit("user-online", uid);
   });
 
   socket.on("check-user-online", (targetUserId) => {
     if (!targetUserId) return;
-    const isOnline = onlineUsers.has(targetUserId.toString());
-    socket.emit("user-online-status", { userId: targetUserId, online: isOnline });
+
+    const uid = String(targetUserId);
+    const isOnline = onlineUsers.has(uid);
+
+    // Optional debug log (remove later if not needed)
+    // console.log(`[check] ${uid} → online=${isOnline} (total online: ${onlineUsers.size})`);
+
+    socket.emit("user-online-status", {
+      userId: uid,           // consistent string
+      online: isOnline
+    });
   });
 
   socket.on("join-conversation", (conversationId) => {
     if (conversationId) {
-      socket.join(conversationId);
+      socket.join(String(conversationId)); // also normalize to string
       // console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
     }
   });
@@ -122,20 +142,40 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    console.log("Client disconnected:", socket.id);
+    //console.log("Client disconnected:", socket.id);
 
-    let disconnectedUserId = null;
+    // Find if this socket was associated with any user
+    const affectedUsers = [];
+
     for (const [userId, sockId] of onlineUsers.entries()) {
       if (sockId === socket.id) {
-        disconnectedUserId = userId;
-        onlineUsers.delete(userId);
-        break;
+        affectedUsers.push(userId);
       }
     }
 
-    if (disconnectedUserId) {
-      io.emit("user-offline", disconnectedUserId);
-    }
+    affectedUsers.forEach((userId) => {
+      // Check if this user has any other active sockets
+      const stillConnected = Array.from(onlineUsers.entries()).some(
+        ([uid, sid]) => uid === userId && sid !== socket.id
+      );
+
+      if (!stillConnected) {
+        // No other sockets left → truly offline
+        onlineUsers.delete(userId);
+        //console.log(`User ${userId} fully offline (no remaining sockets)`);
+        io.emit("user-offline", userId);
+      } else {
+        // Still has other tabs/devices → keep online
+        //console.log(`User ${userId} still connected via other socket(s)`);
+        // Optional: update map to point to one remaining socket
+        const remaining = Array.from(onlineUsers.entries()).find(
+          ([uid, sid]) => uid === userId && sid !== socket.id
+        );
+        if (remaining) {
+          onlineUsers.set(userId, remaining[1]);
+        }
+      }
+    });
   });
 });
 
