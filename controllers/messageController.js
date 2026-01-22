@@ -1,4 +1,5 @@
 // src/controllers/messageController.js
+import mongoose from 'mongoose';
 import Message from "../models/messageModel.js";
 import Conversation from "../models/conversationModel.js";
 import { io } from "../server.js"; 
@@ -217,46 +218,95 @@ const getUserConversations = async (req, res, next) => {
   }
 };
 
-const markConversationAsRead = async (req, res, next) => {
+const markConversationAsRead = async (req, res) => {
   try {
     const userId = req.userId;
     const { conversationId } = req.body;
 
+    // ── 1. Input validation 
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized – user ID missing",
+        code: "AUTH_MISSING_USERID",
+      });
+    }
+
     if (!conversationId) {
       return res.status(400).json({
         success: false,
-        message: "Conversation ID is required",
+        message: "conversationId is required in request body",
+        code: "MISSING_CONVERSATION_ID",
       });
     }
 
-    const unreadMessages = await Message.find({
-      conversationId,
-      sender: { $ne: userId },
-      readBy: { $ne: userId },
-      deletedBy: { $ne: userId },
-    }).select("_id");
+    // Optional: validate ObjectId format early (prevents later cast errors)
+    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid conversationId format",
+        code: "INVALID_CONVERSATION_ID",
+      });
+    }
 
-    const messageIds = unreadMessages.map((m) => m._id);
+    // ── 2. Atomic bulk update 
+    const updateResult = await Message.updateMany(
+      {
+        conversationId: new mongoose.Types.ObjectId(conversationId),
+        sender: { $ne: userId },
+        readBy: { $ne: userId },
+        deletedBy: { $ne: userId },
+      },
+      { $addToSet: { readBy: userId } },
+      { runValidators: true }
+    );
 
-    if (messageIds.length > 0) {
-      await Message.updateMany(
-        { _id: { $in: messageIds } },
-        { $addToSet: { readBy: userId } }
-      );
+    const modifiedCount = updateResult.modifiedCount || 0;
 
-      io.to(conversationId).emit("messages-read", {
+    // Early return when nothing to update (very common case)
+    if (modifiedCount === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No unread messages to mark as read",
+        modifiedCount: 0,
+      });
+    }
+
+    // ── 3. Socket broadcast (only if changes occurred) 
+    if (req.io) {
+      req.io.to(conversationId).emit("messages-read", {
         conversationId,
-        messageIds,
+        userId,
+        modifiedCount,
+        timestamp: new Date().toISOString(),
+        // We no longer send messageIds → frontend should refetch or optimistically update
       });
+    } else {
+      console.warn(`Socket.IO not available – cannot broadcast read status for conversation ${conversationId}`);
     }
 
-    res.status(200).json({
+    // ── 4. Response 
+    return res.status(200).json({
       success: true,
-      message: "Messages marked as read",
-      messageIds,
+      message: `Marked ${modifiedCount} message(s) as read`,
+      modifiedCount,
     });
   } catch (error) {
-    next(error);
+    // Structured logging – very useful in production
+    console.error("markConversationAsRead failed", {
+      userId: req.userId,
+      conversationId: req.body?.conversationId,
+      errorMessage: error.message,
+      errorStack: error.stack?.split("\n").slice(0, 4).join("\n"),
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to mark conversation as read",
+      errorCode: "SERVER_MARK_READ_FAILED",
+      ...(process.env.NODE_ENV === "development" && { debug: error.message }),
+    });
   }
 };
 

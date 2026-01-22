@@ -10,7 +10,6 @@ const attachmentSchema = new mongoose.Schema({
   },
   publicId: {
     type: String,
-    required: true, // critical for deletion
     trim: true,
   },
   name: {
@@ -37,7 +36,7 @@ const messageSchema = new mongoose.Schema(
 
     sender: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "user", // assuming your user model is named "user"
+      ref: "user", 
       required: true,
       index: true,
     },

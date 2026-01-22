@@ -22,21 +22,38 @@ import conversationRouter from "./routes/conversationRoutes.js";
 const app = express();
 const server = http.createServer(app);
 const port = process.env.PORT || 5000;
+
 connectDB();
 
 const allowedOrigins = [process.env.VITE_CLIENT_URL];
 
+
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 
-// Health Endpoint for UptimeRobot
+
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
+// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// API Endpoints
+// Routes
 app.use('/api/auth', authRouter);
 app.use('/api/user', userRouter);
 app.use('/api/paypal', paypalRouter);
@@ -49,25 +66,17 @@ app.use("/api/message", messageRouter);
 app.use("/api/conversation", conversationRouter);
 app.use("/api/call", callRouter);
 
-// -------- Socket.IO Setup --------
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
-
+// Socket.IO connection logic
 const onlineUsers = new Map();
 
 io.on("connection", (socket) => {
-  //console.log("New client connected:", socket.id);
+  // console.log("New client connected:", socket.id);
 
   socket.on("join-room", (userId) => {
     if (userId) {
       socket.join(userId);
       onlineUsers.set(userId, socket.id);
-      //console.log(`User ${userId} joined their room`);
+      // console.log(`User ${userId} joined their room`);
       socket.broadcast.emit("user-online", userId);
     }
   });
@@ -81,7 +90,7 @@ io.on("connection", (socket) => {
   socket.on("join-conversation", (conversationId) => {
     if (conversationId) {
       socket.join(conversationId);
-      //console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
+      // console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
     }
   });
 
@@ -97,22 +106,18 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ────────────────────────────────────────────────
-  // IMPROVED: messages-read handler with logging
-  // ────────────────────────────────────────────────
   socket.on("messages-read", ({ conversationId, userId, messageIds }) => {
     if (!conversationId || !userId || !messageIds?.length) {
-      //console.log("Invalid messages-read payload:", { conversationId, userId, messageIds });
+      // console.log("Invalid messages-read payload:", { conversationId, userId, messageIds });
       return;
     }
 
-    //console.log(`User ${userId} marked messages as read in ${conversationId}:`, messageIds);
+    // console.log(`User ${userId} marked messages as read in ${conversationId}:`, messageIds);
 
-    // Broadcast to the entire conversation room (including sender!)
     io.to(conversationId).emit("messages-read", {
       conversationId,
       messageIds,
-      readByUserId: userId,   // ← optional: helps frontend know who read it
+      readByUserId: userId,
     });
   });
 
@@ -134,6 +139,9 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(port, () => console.log(`Server running on port:${port}`));
+// Start server
+server.listen(port, () => {
+  console.log(`Server running on port: ${port}`);
+});
 
 export { io };

@@ -4,34 +4,20 @@ import userAuth from "../middleware/userAuth.js";
 
 const messageRouter = express.Router();
 
-// ---------- Message Routes ----------
+// Mark whole conversation as read (body: { conversationId })
+messageRouter.patch("/read", userAuth, messageController.markConversationAsRead);
 
-// Create a new message
+// ── CRUD routes with :id after special routes 
+
 messageRouter.post("/", userAuth, messageController.createMessage);
-
-// Get all messages in a conversation with optional pagination
 messageRouter.get("/", userAuth, messageController.getAllMessages);
 
-// Get a single message by ID
+// :id routes come AFTER /read
 messageRouter.get("/:id", userAuth, messageController.getMessageById);
-
-// Full update of a message by ID
 messageRouter.put("/:id", userAuth, messageController.updateMessage);
-
-// Partial update of a message by ID
-messageRouter.patch("/:id", userAuth, messageController.patchMessage);
-
-// Soft delete a message for current user
+messageRouter.patch("/:id", userAuth, messageController.patchMessage);   
 messageRouter.delete("/:id", userAuth, messageController.deleteMessage);
 
-// Get all conversations for the current user with last message & unread counts
 messageRouter.get("/conversations/list", userAuth, messageController.getUserConversations);
-
-messageRouter.patch(
-  "/read",
-  userAuth,
-  messageController.markConversationAsRead
-);
-
 
 export default messageRouter;
