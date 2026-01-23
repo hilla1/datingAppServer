@@ -94,8 +94,8 @@ const getAllMessages = async (req, res, next) => {
       deletedBy: { $ne: req.userId },
     })
       .populate([
-        { path: "sender", select: "name avatar" },
-        { path: "replyTo", populate: { path: "sender", select: "name avatar" }, select: "content attachments sender" },
+        { path: "sender", select: "name avatar lastActive" },
+        { path: "replyTo", populate: { path: "sender", select: "name avatar lastActive" }, select: "content attachments sender" },
       ])
       .sort("createdAt")
       .skip(Number(skip))
@@ -120,8 +120,8 @@ const updateMessage = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Message not found" });
 
     message = await message.populate([
-      { path: "sender", select: "name avatar" },
-      { path: "replyTo", populate: { path: "sender", select: "name avatar" }, select: "content attachments sender" },
+      { path: "sender", select: "name avatar lastActive" },
+      { path: "replyTo", populate: { path: "sender", select: "name avatar lastActive" }, select: "content attachments sender" },
     ]);
 
     res.status(200).json({ success: true, data: message });
@@ -145,8 +145,8 @@ const patchMessage = async (req, res, next) => {
     await message.save();
 
     message = await message.populate([
-      { path: "sender", select: "name avatar" },
-      { path: "replyTo", populate: { path: "sender", select: "name avatar" }, select: "content attachments sender" },
+      { path: "sender", select: "name avatar lastActive" },
+      { path: "replyTo", populate: { path: "sender", select: "name avatar lastActive" }, select: "content attachments sender" },
     ]);
 
     res.status(200).json({ success: true, data: message });
@@ -196,7 +196,7 @@ const getUserConversations = async (req, res, next) => {
     const conversations = await Conversation.find({ participants: userId })
       .populate({
         path: "lastMessage",
-        populate: { path: "sender", select: "name avatar" },
+        populate: { path: "sender", select: "name avatar lastActive" },
       })
       .sort("-updatedAt");
 

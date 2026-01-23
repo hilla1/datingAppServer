@@ -1,4 +1,3 @@
-// src/server.js
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
@@ -19,6 +18,7 @@ import messageRouter from "./routes/messageRoutes.js";
 import callRouter from "./routes/callRoutes.js";
 import conversationRouter from "./routes/conversationRoutes.js";
 import { updateLastActive } from "./utils/updateLastActive.js";
+import User from "./models/userModel.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -28,7 +28,6 @@ connectDB();
 
 const allowedOrigins = [process.env.VITE_CLIENT_URL];
 
-// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -40,6 +39,8 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
+  pingInterval: 25000,
+  pingTimeout: 20000,
 });
 
 app.use((req, res, next) => {
@@ -47,12 +48,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Routes
 app.use('/api/auth', authRouter);
 app.use('/api/user', userRouter);
 app.use('/api/paypal', paypalRouter);
@@ -65,88 +64,125 @@ app.use("/api/message", messageRouter);
 app.use("/api/conversation", conversationRouter);
 app.use("/api/call", callRouter);
 
-// Socket.IO connection logic
-const onlineUsers = new Map(); // userId (as string) → socket.id
+const onlineUsers = new Map();           // userId → latest socket.id
+const socketToUser = new Map();          // socket.id → userId (faster disconnect lookup)
 
 io.on("connection", (socket) => {
-  // console.log("New client connected:", socket.id);
-
   let heartbeatInterval = null;
+  let currentUserId = null;
 
-  socket.on("join-room", (userId) => {
+  const cleanupUser = async (userId) => {
     if (!userId) return;
+    if (onlineUsers.get(userId) === socket.id) {
+      onlineUsers.delete(userId);
+      socketToUser.delete(socket.id);
 
-    // Force string conversion – critical to avoid ObjectId vs string mismatch
-    const uid = String(userId);
-
-    // Clean up any previous entries for this user (handles multi-tab / reconnect)
-    for (const [existingUid, existingSockId] of onlineUsers.entries()) {
-      if (existingUid === uid) {
-        onlineUsers.delete(existingUid);
-        // Optional: you could notify old socket, but not necessary
+      try {
+        await updateLastActive(userId);
+        io.emit("user-offline", {
+          userId,
+          lastSeenAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error(`Failed to update lastActive for ${userId}:`, err.message);
       }
     }
+  };
 
+  socket.on("join-room", (userId) => {
+    if (!userId || typeof userId !== "string") return;
+
+    const uid = String(userId);
+
+    // Remove previous connection for same user (multi-tab / reconnect)
+    if (onlineUsers.has(uid)) {
+      const oldSocketId = onlineUsers.get(uid);
+      socketToUser.delete(oldSocketId);
+    }
+
+    currentUserId = uid;
     socket.join(uid);
     onlineUsers.set(uid, socket.id);
-    // console.log(`User ${uid} joined their room (socket ${socket.id})`);
+    socketToUser.set(socket.id, uid);
 
-    // Update lastActive immediately on join
     updateLastActive(uid);
 
-    // ── NEW: Heartbeat – keep lastActive fresh while tab/window is open ──
+    // Heartbeat – only update if this is still the active socket for the user
     heartbeatInterval = setInterval(() => {
-      if (socket.connected && onlineUsers.has(uid)) {
+      if (socket.connected && onlineUsers.get(uid) === socket.id) {
         updateLastActive(uid);
       }
-    }, 60_000); // 60 seconds – good balance between freshness & DB writes
+    }, 45000); // slightly less aggressive than 60s
 
-    // Broadcast to others (not to self)
+    // Notify others
     socket.broadcast.emit("user-online", uid);
   });
 
-  socket.on("check-user-online", (targetUserId) => {
+  socket.on("check-user-online", async (targetUserId) => {
     if (!targetUserId) return;
 
     const uid = String(targetUserId);
     const isOnline = onlineUsers.has(uid);
 
-    // Optional debug log (remove later if not needed)
-    // console.log(`[check] ${uid} → online=${isOnline} (total online: ${onlineUsers.size})`);
+    let lastSeenAt = null;
+    if (!isOnline) {
+      try {
+        const userDoc = await User.findById(uid).select("lastActive").lean();
+        lastSeenAt = userDoc?.lastActive ? new Date(userDoc.lastActive).toISOString() : null;
+      } catch (err) {
+        console.error("check-user-online DB error:", err.message);
+        lastSeenAt = new Date().toISOString();
+      }
+    }
 
     socket.emit("user-online-status", {
-      userId: uid,           // consistent string
-      online: isOnline
+      userId: uid,
+      online: isOnline,
+      lastSeenAt,
     });
   });
 
-  socket.on("join-conversation", (conversationId) => {
-    if (conversationId) {
-      socket.join(String(conversationId)); // also normalize to string
-      // console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
+  // Batch endpoint – very important for lists/grids
+  socket.on("check-users-online", async (userIds) => {
+    if (!Array.isArray(userIds)) return;
+    if (userIds.length === 0 || userIds.length > 400) return; // safety limit
+
+    const results = [];
+
+    for (const rawId of userIds) {
+      const uid = String(rawId);
+      const isOnline = onlineUsers.has(uid);
+
+      let lastSeenAt = null;
+      if (!isOnline) {
+        try {
+          const doc = await User.findById(uid).select("lastActive").lean();
+          lastSeenAt = doc?.lastActive ? new Date(doc.lastActive).toISOString() : null;
+        } catch {
+          lastSeenAt = new Date().toISOString();
+        }
+      }
+
+      results.push({ userId: uid, online: isOnline, lastSeenAt });
     }
+
+    socket.emit("users-online-status", results);
+  });
+
+  socket.on("join-conversation", (conversationId) => {
+    if (conversationId) socket.join(String(conversationId));
   });
 
   socket.on("typing", ({ conversationId }) => {
-    if (conversationId) {
-      socket.to(conversationId).emit("typing", { conversationId });
-    }
+    if (conversationId) socket.to(conversationId).emit("typing", { conversationId });
   });
 
   socket.on("stop-typing", ({ conversationId }) => {
-    if (conversationId) {
-      socket.to(conversationId).emit("stop-typing", { conversationId });
-    }
+    if (conversationId) socket.to(conversationId).emit("stop-typing", { conversationId });
   });
 
   socket.on("messages-read", ({ conversationId, userId, messageIds }) => {
-    if (!conversationId || !userId || !messageIds?.length) {
-      // console.log("Invalid messages-read payload:", { conversationId, userId, messageIds });
-      return;
-    }
-
-    // console.log(`User ${userId} marked messages as read in ${conversationId}:`, messageIds);
-
+    if (!conversationId || !userId || !Array.isArray(messageIds) || !messageIds.length) return;
     io.to(conversationId).emit("messages-read", {
       conversationId,
       messageIds,
@@ -154,57 +190,23 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("disconnect", () => {
-    //console.log("Client disconnected:", socket.id);
-
-    // Clear heartbeat interval
+  socket.on("disconnect", async () => {
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
-      heartbeatInterval = null;
     }
 
-    // Find if this socket was associated with any user
-    const affectedUsers = [];
-
-    for (const [userId, sockId] of onlineUsers.entries()) {
-      if (sockId === socket.id) {
-        affectedUsers.push(userId);
-      }
+    if (currentUserId) {
+      await cleanupUser(currentUserId);
+    } else if (socketToUser.has(socket.id)) {
+      // fallback – in case join-room never happened
+      const uid = socketToUser.get(socket.id);
+      await cleanupUser(uid);
     }
-
-    affectedUsers.forEach((userId) => {
-      // Check if this user has any other active sockets
-      const stillConnected = Array.from(onlineUsers.entries()).some(
-        ([uid, sid]) => uid === userId && sid !== socket.id
-      );
-
-      if (!stillConnected) {
-        // No other sockets left → truly offline
-        onlineUsers.delete(userId);
-        //console.log(`User ${userId} fully offline (no remaining sockets)`);
-
-        // ── NEW: Final lastActive update when user goes fully offline ──
-        updateLastActive(userId);
-
-        io.emit("user-offline", userId);
-      } else {
-        // Still has other tabs/devices → keep online
-        //console.log(`User ${userId} still connected via other socket(s)`);
-        // Optional: update map to point to one remaining socket
-        const remaining = Array.from(onlineUsers.entries()).find(
-          ([uid, sid]) => uid === userId && sid !== socket.id
-        );
-        if (remaining) {
-          onlineUsers.set(userId, remaining[1]);
-        }
-      }
-    });
   });
 });
 
-// Start server
 server.listen(port, () => {
-  console.log(`Server running on port: ${port}`);
+  console.log(`Server running on port ${port}`);
 });
 
 export { io };
