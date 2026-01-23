@@ -64,14 +64,15 @@ const getProfileByUserId = async (req, res, next) => {
   }
 };
 
-/* ---------------- GET ALL PROFILES ---------------- */
+/* ---------------- GET ALL PROFILES (excluding current user) ---------------- */
 const getAllProfiles = async (req, res, next) => {
   try {
-    const totalProfiles = await Profile.countDocuments();
-    const apiFeatures = new ApiFeatures(
-      Profile.find(),
-      req.query
-    )
+    // Build base query — exclude the current user's profile
+    let query = Profile.find({ user: { $ne: req.userId } });
+
+    const totalProfiles = await Profile.countDocuments({ user: { $ne: req.userId } });
+
+    const apiFeatures = new ApiFeatures(query, req.query)
       .search()
       .filter()
       .sort()

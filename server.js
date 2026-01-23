@@ -18,6 +18,7 @@ import profileRouter from "./routes/profileRoutes.js";
 import messageRouter from "./routes/messageRoutes.js";
 import callRouter from "./routes/callRoutes.js";
 import conversationRouter from "./routes/conversationRoutes.js";
+import { updateLastActive } from "./utils/updateLastActive.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -70,6 +71,8 @@ const onlineUsers = new Map(); // userId (as string) → socket.id
 io.on("connection", (socket) => {
   // console.log("New client connected:", socket.id);
 
+  let heartbeatInterval = null;
+
   socket.on("join-room", (userId) => {
     if (!userId) return;
 
@@ -87,6 +90,16 @@ io.on("connection", (socket) => {
     socket.join(uid);
     onlineUsers.set(uid, socket.id);
     // console.log(`User ${uid} joined their room (socket ${socket.id})`);
+
+    // Update lastActive immediately on join
+    updateLastActive(uid);
+
+    // ── NEW: Heartbeat – keep lastActive fresh while tab/window is open ──
+    heartbeatInterval = setInterval(() => {
+      if (socket.connected && onlineUsers.has(uid)) {
+        updateLastActive(uid);
+      }
+    }, 60_000); // 60 seconds – good balance between freshness & DB writes
 
     // Broadcast to others (not to self)
     socket.broadcast.emit("user-online", uid);
@@ -144,6 +157,12 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     //console.log("Client disconnected:", socket.id);
 
+    // Clear heartbeat interval
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+
     // Find if this socket was associated with any user
     const affectedUsers = [];
 
@@ -163,6 +182,10 @@ io.on("connection", (socket) => {
         // No other sockets left → truly offline
         onlineUsers.delete(userId);
         //console.log(`User ${userId} fully offline (no remaining sockets)`);
+
+        // ── NEW: Final lastActive update when user goes fully offline ──
+        updateLastActive(userId);
+
         io.emit("user-offline", userId);
       } else {
         // Still has other tabs/devices → keep online

@@ -23,6 +23,11 @@ const userSchema = new mongoose.Schema(
 
     resetOtp: { type: String, default: "" },
     resetOtpExpireAt: { type: Number, default: 0 },
+
+    lastActive: {
+      type: Date,
+      default: Date.now,
+    },
   },
   { timestamps: true }
 );
